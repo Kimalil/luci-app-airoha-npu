@@ -55,6 +55,9 @@ jobs:
         working-directory: sdk
         run: |
           mv ../package/luci-app-airoha-npu package/
+          
+          sed -i 's|../../luci.mk|$(TOPDIR)/feeds/luci/luci.mk|g' package/luci-app-airoha-npu/Makefile
+          
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
