@@ -61,7 +61,7 @@ jobs:
             gettext git libncurses-dev libssl-dev python3-setuptools \
             rsync unzip zlib1g-dev file wget jq curl zstd
 
-      - name: Download Airoha SDK
+      - name: Download SDK and Toolchain
         env:
           TARGET: airoha
           SUBTARGET: ${{ matrix.subtarget }}
@@ -69,25 +69,18 @@ jobs:
           BASE_URL="https://downloads.openwrt.org/snapshots/targets/${TARGET}/${SUBTARGET}"
           
           SDK_FILE=$(curl -s "$BASE_URL/sha256sums" | grep -oE "openwrt-sdk-[a-zA-Z0-9_.-]+\.tar\.(zst|xz)" | head -n1)
-          
-          if [ -z "$SDK_FILE" ]; then
-            echo "Error: not found SDK"
-            exit 1
-          fi
-          
-          echo "Download: $SDK_FILE"
           wget -q "$BASE_URL/$SDK_FILE"
-          
-          mkdir sdk
-          tar -xf "$SDK_FILE" -C sdk --strip-components=1
+          mkdir sdk && tar -xf "$SDK_FILE" -C sdk --strip-components=1
+
+          TC_FILE=$(curl -s "$BASE_URL/sha256sums" | grep -oE "openwrt-toolchain-[a-zA-Z0-9_.-]+\.tar\.(zst|xz)" | head -n1)
+          wget -q "$BASE_URL/$TC_FILE"
+          mkdir toolchain && tar -xf "$TC_FILE" -C toolchain --strip-components=1
 
       - name: Prepare build environment
         working-directory: sdk
         run: |
           mv ../package/luci-app-airoha-npu package/
-          
           sed -i 's|../../luci.mk|$(TOPDIR)/feeds/luci/luci.mk|g' package/luci-app-airoha-npu/Makefile
-          
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
@@ -104,17 +97,23 @@ jobs:
         run: |
           make package/luci-app-airoha-npu/compile -j$(nproc) V=s
 
-      - name: Extract and verify APK
+      - name: Build devmem utility
         run: |
           mkdir -p output_apk
-          find sdk/bin/packages/ -type f -name "luci-app-airoha-npu*.apk" -exec sh -c 'cp "$1" "output_apk/$(basename "${1%.*}")_${{ matrix.subtarget }}.apk"' _ {} \;
+          COMPILER=$(find toolchain/bin -type f -name "*-openwrt-linux-musl-gcc" | head -n 1)
+          $COMPILER package/luci-app-airoha-npu/devmem.c -o output_apk/devmem_${{ matrix.subtarget }} -O2
+          chmod +x output_apk/devmem_${{ matrix.subtarget }}
+
+      - name: Collect artifacts
+        run: |
+          find sdk/bin/packages/ -type f -name "luci-app-airoha-npu*.apk" -exec cp {} output_apk/ \;
           ls -lh output_apk/
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: luci-app-airoha-npu-${{ matrix.subtarget }}-apk
-          path: output_apk/*.apk
+          name: luci-app-airoha-npu-${{ matrix.subtarget }}-artifacts
+          path: output_apk/
           if-no-files-found: error
 
   release:
@@ -137,5 +136,5 @@ jobs:
         with:
           tag_name: ${{ needs.get_version.outputs.pkg_version }}
           name: Release ${{ needs.get_version.outputs.pkg_version }}
-          files: release-artifacts/*.apk
+          files: release-artifacts/*
           generate_release_notes: true
