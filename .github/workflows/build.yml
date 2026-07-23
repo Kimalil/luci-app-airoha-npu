@@ -48,8 +48,8 @@ jobs:
           echo "Download: $SDK_FILE"
           wget -q "$BASE_URL/$SDK_FILE"
           
-          tar -xf "$SDK_FILE"
-          mv openwrt-sdk-* sdk
+          mkdir sdk
+          tar -xf "$SDK_FILE" -C sdk --strip-components=1
 
       - name: Prepare build environment
         working-directory: sdk
