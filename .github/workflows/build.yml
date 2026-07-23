@@ -8,7 +8,37 @@ on:
   workflow_dispatch:
 
 jobs:
+  get_version:
+    name: Get version from Makefile
+    runs-on: ubuntu-24.04
+    outputs:
+      pkg_version: ${{ steps.extract.outputs.VERSION }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Extract Version
+        id: extract
+        run: |
+          VER=$(grep -oP '^PKG_VERSION:=\K.*' Makefile | tr -d ' \r\n')
+          REL=$(grep -oP '^PKG_RELEASE:=\K.*' Makefile | tr -d ' \r\n')
+          
+          if [ -z "$VER" ]; then
+            echo "Error: PKG_VERSION not found in Makefile"
+            exit 1
+          fi
+          
+          if [ -n "$REL" ]; then
+            FULL_VER="v${VER}-${REL}"
+          else
+            FULL_VER="v${VER}"
+          fi
+          
+          echo "Found version: $FULL_VER"
+          echo "VERSION=$FULL_VER" >> $GITHUB_OUTPUT
+
   build:
+    needs: get_version
     name: Build for ${{ matrix.subtarget }}
     runs-on: ubuntu-24.04
     strategy:
@@ -77,7 +107,7 @@ jobs:
       - name: Extract and verify APK
         run: |
           mkdir -p output_apk
-          find sdk/bin/packages/ -type f -name "luci-app-airoha-npu*.apk" -exec cp {} output_apk/ \;
+          find sdk/bin/packages/ -type f -name "luci-app-airoha-npu*.apk" -exec sh -c 'cp "$1" "output_apk/$(basename "${1%.*}")_${{ matrix.subtarget }}.apk"' _ {} \;
           ls -lh output_apk/
 
       - name: Upload Artifact
@@ -86,3 +116,26 @@ jobs:
           name: luci-app-airoha-npu-${{ matrix.subtarget }}-apk
           path: output_apk/*.apk
           if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [get_version, build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Publish Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.get_version.outputs.pkg_version }}
+          name: Release ${{ needs.get_version.outputs.pkg_version }}
+          files: release-artifacts/*.apk
+          generate_release_notes: true
